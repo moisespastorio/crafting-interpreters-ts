@@ -26,6 +26,8 @@ export class Parser {
       if (decl !== null) statements.push(decl);
     }
 
+    console.log(statements);
+
     return statements;
   }
 

@@ -1,6 +1,7 @@
 // Port of Lox.java.
 import * as fs from "node:fs";
 import * as readline from "node:readline";
+import { pathToFileURL } from "node:url";
 import type { Token } from "./token.js";
 import { Scanner } from "./scanner.js";
 import { Parser } from "./parser.js";
@@ -38,6 +39,20 @@ export class Lox {
   }
 
   private static runPrompt(): void {
+    // `jlox` in Java never had to worry about this: `System.in` is always
+    // a real, blocking stream. Node is more Unix-y about it and exposes
+    // `process.stdin.isTTY`, which is only `true` when stdin is an actual
+    // interactive terminal. When you launch this via something that
+    // doesn't attach one (many IDE "run" buttons, some task runners),
+    // stdin is already at EOF the instant the process starts, so
+    // `readline`'s `question()` just quietly closes without ever
+    // printing "> " or calling its callback -- the exact silent exit
+    // you were seeing.
+    if (!process.stdin.isTTY) {
+      Lox.runNonInteractive();
+      return;
+    }
+
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
     const prompt = (): void => rl.question("> ", (line) => {
@@ -51,6 +66,40 @@ export class Lox {
     });
 
     prompt();
+  }
+
+  // Fallback for when stdin isn't an interactive terminal. If something
+  // was actually piped in (`cat script.lox | npm start`), read it all and
+  // run it as one program -- same spirit as the REPL, just without a
+  // prompt to print. If nothing at all comes through, say so instead of
+  // exiting without a trace.
+  private static runNonInteractive(): void {
+    let input = "";
+    process.stdin.setEncoding("utf8");
+
+    process.stdin.on("data", (chunk) => {
+      input += chunk;
+    });
+
+    process.stdin.on("end", () => {
+      if (input.trim().length === 0) {
+        console.log(
+          "No interactive terminal detected, and nothing was piped in on stdin.\n" +
+            "The REPL needs a real terminal to prompt for input. Try one of:\n" +
+            "  npx tsx src/lox.ts examples/closures-and-classes.lox   " +
+            "(run a script file)\n" +
+            "  echo 'print 1 + 2;' | npx tsx src/lox.ts               " +
+            "(pipe a program in)\n" +
+            "  npx tsx src/lox.ts                                    " +
+            "(run this directly in a real terminal for the REPL)",
+        );
+        return;
+      }
+
+      Lox.run(input);
+      if (Lox.hadError) process.exitCode = 65;
+      if (Lox.hadRuntimeError) process.exitCode = 70;
+    });
   }
 
   private static run(source: string): void {
@@ -100,7 +149,10 @@ export class Lox {
 // this file is executed directly (e.g. `tsx src/lox.ts`), not when it's
 // imported by other modules (scanner.ts, parser.ts, etc. import Lox for
 // error reporting, and we don't want that import to launch the REPL).
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+const isMain =
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
 if (isMain) {
   Lox.main(process.argv.slice(2));
 }
